@@ -48,9 +48,9 @@ def ParseTStampCSV(sTStampFile, sTaskTStampFile, iChildID, sWordIDsFile):
     if not isfile(sTStampFile):
         raise Exception("child {}: timestamp file not exist".format(iChildID,sTStampFile))
     if not isfile(sTaskTStampFile):
-        raise Exception("child {}: timestamp file not exist".format(iChildID,sTaskTStampFile))
+        raise Exception("child {}: task timestamp file not exist".format(iChildID,sTaskTStampFile))
     if not isfile(sWordIDsFile):
-        raise Exception("child {}: timestamp file not exist".format(iChildID,sWordIDsFile))
+        raise Exception("child {}: word mapping file not exist".format(iChildID,sWordIDsFile))
 
 
     #Load the prompt mapping file
@@ -141,8 +141,16 @@ def ParseTStampCSV(sTStampFile, sTaskTStampFile, iChildID, sWordIDsFile):
     return tTasks, dTaskPrompts
 
 
-def Segmentor(sWavFile, sTimeStampCSV, iChildID):
+def Segmentor(sWavFile, sTimeStampCSV, sTaskTStampCSV, iChildID, sWordIDsFile, sOutDir):
     #Load Wav File (session)
+    if not isfile(sWavFile):
+        raise Exception("child {}: session speech File {} not exist".format(iChildID,sWavFile))
+    
+    tTask, tPrompts = ParseTStampCSV(sTimeStampCSV, sTaskTStampCSV, iChildID, sWordIDsFile)
+
+
+
+
     #Detect the start and end of all beep signal(s)
     #ParseCSV file get tTasks, dTaskPrompts
     #TODO fill interval gaps with empty, this should be done in the writetextgrid function
