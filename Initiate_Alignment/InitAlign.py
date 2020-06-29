@@ -3,8 +3,11 @@
 
 from collections import namedtuple, defaultdict
 import pandas as pd
+import numpy as np
+import wave, struct
 import logging
 from os.path import isfile
+import external.pyAudioAnalysis.pyAudioAnalysis.ShortTermFeatures as sF
 
 """TimeStamp CSV Columns
 0 - id: child id, dtype 'int'
@@ -37,9 +40,76 @@ tTaskTimes = namedtuple('TaskTimes',lTasks)
 tPrompt = namedtuple('Prompt',['taskID','wordID','word','answerTime','cueOnset','cueOffset'])
 offset = 2 # seconds added to the end time of each task
 
-def GetBeepTime():
-    #TODO implement this
-    return 5
+def GetBeepTimes(sWavFile, nReadFrames = 10, nFramDur = 0.02, zcTh = 0.2, srTh = 0.2, BeepDur = 1, p = 0.8):
+    fWav = wave.open(sWavFile,'rb')
+    if not isfile(sWavFile):
+        raise Exception("Wave file {} not exist".format(sWavFile))
+    fr = fWav.getframerate()
+    nFrameSamples = int(nFramDur * fr)
+    nReadSamples = nReadFrames * nFrameSamples
+
+
+    nSamples = fWav.getnframes()
+    nFrames = int(nSamples/nFrameSamples)
+    num_fft = int(nFrameSamples / 2)
+
+    vZC = np.zeros((nFrames+1),dtype=int)
+    vSR = np.zeros((nFrames+1),dtype=int)
+    
+    indx = 0
+    while fWav.tell() != nSamples:
+        data = fWav.readframes(nReadSamples)
+        data = list(struct.iter_unpack('h',data))
+        #Normalization and remove dc-shift if any
+        data = np.double(data)
+        data = data / (2.0 ** 15)
+        dc_offset = data.mean()
+        maximum = (np.abs(data)).max()
+        data = (data - dc_offset) / maximum
+        
+        for iFr in range(nReadFrames):
+            Fram_data = data[iFr * nFrameSamples : (iFr+1) * nFrameSamples,0]
+            vZC[indx] = int(sF.zero_crossing_rate(Fram_data) > zcTh)
+            
+            # get fft magnitude
+            fft_magnitude = abs(sF.fft(Fram_data))
+
+            # normalize fft
+            fft_magnitude = fft_magnitude[0:num_fft]
+            fft_magnitude = fft_magnitude / len(fft_magnitude)
+
+            vSR[indx] = int(sF.spectral_rolloff(fft_magnitude,0.9) > srTh)
+
+            indx += 1
+    fWav.close()
+
+    BeepnFrames = int(BeepDur/nFramDur)
+    sum_zc = np.sum(vZC[:BeepnFrames])
+    sum_sr = np.sum(vSR[:BeepnFrames])
+    vSum_zc = np.zeros(vZC.shape[0]-BeepnFrames,dtype=int)
+    vSum_sr = np.zeros(vZC.shape[0]-BeepnFrames,dtype=int)
+
+    for i in range(vZC.shape[0]-BeepnFrames):
+        sum_zc = sum_zc - vZC[i] + vZC[i+BeepnFrames]
+        sum_sr = sum_sr - vSR[i] + vSR[i+BeepnFrames]
+        vSum_zc[i] = sum_zc
+        vSum_sr[i] = sum_sr
+
+
+    mask_zc = (vSum_zc > p*BeepnFrames).astype(int)
+    mask_sr = (vSum_sr > p*BeepnFrames).astype(int)
+
+    mask_zc[0] = mask_zc[-1] = 0
+    mask_sr[0] = mask_sr[-1] = 0
+
+
+    dif_zc = mask_zc - np.roll(mask_zc,1)
+    dif_sr = mask_sr - np.roll(mask_sr,1)
+
+    BeepTimes_zc = np.where(dif_zc == 1)[0]*nFramDur
+    BeepTimes_sr = np.where(dif_sr == 1)[0]*nFramDur
+
+    return dif_zc, dif_sr, BeepTimes_zc, BeepTimes_sr
 
 
 def ParseTStampCSV(sTStampFile, sTaskTStampFile, iChildID, sWordIDsFile):

@@ -3,7 +3,7 @@
 import argparse
 from collections import defaultdict
 import wave
-from os.path import basename, splitext, join
+from os.path import basename, splitext, join, isfile
 import bisect
 import re
 from difflib import SequenceMatcher
@@ -26,7 +26,7 @@ def is_sorted(a):
 
 
 def ReadWavFile(sWavFileName):
-    if not isfile(sWavFile):
+    if not isfile(sWavFileName):
         raise Exception(" Wave file {} not exist".format(sWavFileName))
     with wave.open(sWavFileName,'rb') as fWav:
         _wav_params = fWav.getparams()
