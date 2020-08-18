@@ -7,7 +7,7 @@ import numpy as np
 import wave, struct
 import logging
 from os.path import isfile
-import external.pyAudioAnalysis.pyAudioAnalysis.ShortTermFeatures as sF
+import pyAudioAnalysis.pyAudioAnalysis.ShortTermFeatures as sF
 
 """TimeStamp CSV Columns
 0 - id: child id, dtype 'int'
@@ -57,7 +57,7 @@ def GetBeepTimes(sWavFile, nReadFrames = 10, nFramDur = 0.02, zcTh = 0.2, srTh =
     vSR = np.zeros((nFrames+1),dtype=int)
     
     indx = 0
-    while fWav.tell() != nSamples:
+    while fWav.tell() <= nSamples-nReadSamples:
         data = fWav.readframes(nReadSamples)
         data = list(struct.iter_unpack('h',data))
         #Normalization and remove dc-shift if any
