@@ -1,13 +1,17 @@
-#TODO BeepDetect(sWavFile) Function to detect the beep time of the wav file and return it (in sec) e.g. Second 5.2
-#TODO ParseTimeStampCSV(sTimeStampFile) Return 
-
 from collections import namedtuple, defaultdict
 import pandas as pd
 import numpy as np
 import wave, struct
 import logging
-from os.path import isfile
+import configparser
+from os.path import isfile, join, isdir, splitext, basename
+from os import makedirs
 import pyAudioAnalysis.pyAudioAnalysis.ShortTermFeatures as sF
+import txtgrid_master.TextGrid_Master as txtgrd
+from joblib import dump, load
+from scipy.signal import find_peaks
+from tqdm import tqdm
+import sys
 
 """TimeStamp CSV Columns
 0 - id: child id, dtype 'int'
@@ -111,6 +115,139 @@ def GetBeepTimes(sWavFile, nReadFrames = 10, nFramDur = 0.02, zcTh = 0.2, srTh =
 
     return dif_zc, dif_sr, BeepTimes_zc, BeepTimes_sr
 
+#TODO: Speed up beep detection use only MFCC
+def GetBeepTimesML(sConfFile, sWavFile, iThrshld=98, fBeepDur = 1):
+
+    #Set Default Values
+    sModelFile = ''
+    Context = (-2,-1,0,1,2)
+    fFrameRate = 0.01
+    fWindowSize = 0.02
+    bUseDelta = False
+    sFeatureType = 'STF'
+
+
+    #Load Values from ini file
+    if not isfile(sConfFile):
+        raise Exception('Config file {0} is not exist'.format(sConfFile))
+    config = configparser.ConfigParser()
+    config.read(sConfFile)
+    try:
+        Flags = config['FLAGS']
+    except KeyError:
+        logging.error('Config File {0} must contains section [FLAGS]'.format(sConfFile))
+        raise RuntimeError('Config file format error')
+    
+    if 'Model' not in Flags:
+        logging.error('Please set Model parameter in the config file {0}'.format(sConfFile))
+        raise RuntimeError('Config file format error')
+    else:
+        sModelFile = Flags['Model']
+
+    if 'Context' in Flags:
+        Context = tuple([int(i) for i in Flags['Context'].split(',')])
+    if 'FrameRate' in Flags:
+        fFrameRate = Flags.getfloat('FrameRate')
+    if 'WindowSize' in Flags:
+        fWindowSize = Flags.getfloat('WindowSize')
+    if 'UseDelta' in Flags:
+        bUseDelta = Flags.getboolean('UseDelta')
+    if 'FeatureType' in Flags:
+        sFeatureType = Flags['FeatureType']
+        
+
+
+    if not sModelFile:
+        raise Exception('Please set Model parameter in the config file {0}'.format(sConfFile))
+
+    #Load Model
+    if not isfile(sModelFile):
+        raise Exception('Model file {0} is not exist'.format(sModelFile))
+
+    clf = load(sModelFile)
+
+    nChunkSize = 1000 #Number of frames to read each time
+
+    #Get number of padded rows for context
+    nPostPad = max(Context)
+    nPrePad = abs(min(Context))
+
+    #Beep Detection
+    if not isfile(sModelFile):
+        raise Exception('Wave file {0} is not exist'.format(sWavFile))
+
+    
+    with wave.open(sWavFile) as fWav:
+        iSampleRate = fWav.getframerate()
+        nSamples = fWav.getnframes()
+        assert fWav.getsampwidth() == 2, 'Only 16 bit resolution supported, Please convert the file'
+
+        nBeepFrames = int(fBeepDur/fFrameRate)
+
+        nFrames = int(nSamples / (fFrameRate * iSampleRate))
+        logging.info("Processing file {0} contains {1} frames".format(sWavFile,nFrames))
+
+        aBeepMask = np.zeros(nFrames,dtype=int)
+
+        nStepSamples = int(fFrameRate*iSampleRate)
+        nWindowSamples = int(fWindowSize*iSampleRate)
+        nOverLabSamples = nWindowSamples - nStepSamples
+
+        i = 0
+        with tqdm(total=nFrames) as pbar:
+            while fWav.tell() < nSamples-nWindowSamples:
+                #print(nChunkSize,fStepSize,iFrameRate)
+                data = fWav.readframes(int(nChunkSize*nStepSamples)+nWindowSamples)
+                data = [ x[0] for x in struct.iter_unpack('h',data)]
+                data = np.asarray(data)
+                aFeatures, lFeatures_names = sF.feature_extraction(data,iSampleRate,nWindowSamples,nStepSamples,deltas=bUseDelta)
+
+                aFeatures = aFeatures.T
+                #Handle context
+                aPostPad = np.zeros((nPostPad,aFeatures.shape[1]))
+                aPrePad = np.zeros((nPrePad,aFeatures.shape[1]))
+
+                aFeatures_pad = np.r_[aPrePad,aFeatures,aPostPad]
+
+                aShiftVer = [np.roll(aFeatures_pad, i, axis=0) for i in Context[::-1]] #To handle context generate multiple shifted versions, this method faster but consume memory 
+
+                aFeatures = np.concatenate(aShiftVer,axis=1)[0+nPrePad:-nPostPad]
+
+
+                X = aFeatures
+
+                y_pred = clf.predict(X)
+                
+                aBeepMask[i:i+y_pred.shape[0]] = y_pred
+                
+                logging.info('done {} frames out of {} frames'.format(i,nFrames))
+                
+                i = i+y_pred.shape[0]
+                
+                fWav.setpos(fWav.tell() - nOverLabSamples)
+
+                #print(fWav.tell(),nSamples)
+
+                #pbar.update(i)
+        
+        suma=np.sum(aBeepMask[:nBeepFrames])
+        vSum = np.zeros(aBeepMask.shape[0]-nBeepFrames)
+        for i in range(aBeepMask.shape[0]-nBeepFrames):
+            vSum[i] = suma
+            suma = suma - aBeepMask[i] + aBeepMask[i+nBeepFrames]
+
+        lPeaks = find_peaks(vSum,height=iThrshld)[0]
+
+        lBeepTimes = lPeaks * fFrameRate
+        
+        logging.info('File {0}: {1} beeps detected at {2}'.format(sWavFile,len(lBeepTimes),lBeepTimes))
+
+    return lBeepTimes
+
+#TODO read directly from SQL database
+def GetTimeStampsSQL(sMySQLDatabase, iChildID):
+    #TODO verify ChildID is exist, if ot return error
+    return
 
 def ParseTStampCSV(sTStampFile, sTaskTStampFile, iChildID, sWordIDsFile):
     
@@ -157,14 +294,26 @@ def ParseTStampCSV(sTStampFile, sTaskTStampFile, iChildID, sWordIDsFile):
     lTaskTimes = []
 
     for i,sTaskID in enumerate(lTasks):
-        iTaskID = i+1 
-        fTaskST,fTaskET = child_task_tstamps[i+2:i+4] #First two columns for the child_id and ra_id
+        iTaskID = i+1
+        #TODO Use column names
+        fTaskST,fTaskET = child_task_tstamps[2*i+2:2*i+4] #First two columns for the child_id and ra_id
+        #print(fTaskST,fTaskET,iTaskID)
 
-        if pd.isnull(fTaskST) or pd.isnull(fTaskET):
-            logging.error('child {}: No start or end timestamp for task {} in file {}, task will be skipped'.format(iChildID,sTaskTStampFile))
-            lTaskTimes.append((-1,-1))
-            continue
-        lTaskTimes.append((fTaskST.timestamp() - RefTime,fTaskET.timestamp() - RefTime))
+        if pd.isnull(fTaskST):
+            logging.warning('child {0}: No start timestamp for task {1} in file {2}'.format(iChildID,sTaskID,sTaskTStampFile))
+            fTaskST = -1
+            #lTaskTimes.append((-1,-1))
+        else:
+            fTaskST = fTaskST.timestamp() - RefTime
+
+        if pd.isnull(fTaskET):
+            logging.warning('child {0}: No end timestamp for task {1} in file {2}'.format(iChildID,sTaskID,sTaskTStampFile))
+            fTaskET = -1
+        else:
+            fTaskET = fTaskET.timestamp() - RefTime
+
+
+        lTaskTimes.append((fTaskST ,fTaskET))
 
         pdTask = pdChild[pdChild.task_id==iTaskID] ##CHANGE if COL CHANGED
         
@@ -211,14 +360,141 @@ def ParseTStampCSV(sTStampFile, sTaskTStampFile, iChildID, sWordIDsFile):
     return tTasks, dTaskPrompts
 
 
-def Segmentor(sWavFile, sTimeStampCSV, sTaskTStampCSV, iChildID, sWordIDsFile, sOutDir):
+def GetOffsetTime(tTasks, lBeepTimes):
+    #Get number of tasks
+    nTasks = len(tTasks)
+    nBeepTimeStamps = []
+    for fTaskST, fTaskET in tTasks:
+        nBeepTimeStamps.append(fTaskST) if fTaskST != -1 else Null
+    lDifTimes = []
+    for i in range(len(lBeepTimes)):
+        for j in range(len(nBeepTimeStamps)):
+            lDifTimes.append(abs(lBeepTimes[i]-nBeepTimeStamps[j]))
+    
+    lDifTimes = np.asarray(lDifTimes)
+    lDifTimes.sort()
+    
+    iEqualDiss = np.where(np.diff(lDifTimes,n=1,axis=0) < 1 )[0]
+    
+    if iEqualDiss.size == 0:
+        logging.error('Failed to verify beep times')
+        fOffsetTime=-1
+    else:
+        fOffsetTime = np.mean(lDifTimes[iEqualDiss])
+    
+    return fOffsetTime
+
+#TODO will use mySQL database, no need to CSV files, CHILD ID will be extracted from wav file
+def Segmentor(sConfigFile, sWavFile, sTimeStampCSV, sTaskTStampCSV, iChildID, sWordIDsFile, sOutDir):
+
+    #TODO get child ID from wav file
+    #TODO verify naming convention of file
+
     #Load Wav File (session)
     if not isfile(sWavFile):
-        raise Exception("child {}: session speech File {} not exist".format(iChildID,sWavFile))
+        logging.error("Child {}: session speech File {} not exist".format(iChildID,sWavFile))
+        raise Exception("Child {}: session speech File {} not exist".format(iChildID,sWavFile))
     
-    tTask, tPrompts = ParseTStampCSV(sTimeStampCSV, sTaskTStampCSV, iChildID, sWordIDsFile)
+    sWavFileBasename = splitext(basename(sWavFile))[0]
+
+    if not isdir(sOutDir):
+        makedirs(sOutDir)
+     
+    logging.info('Child {}: Start Processing File {}'.format(iChildID,sWavFile))
+    
+    logging.info('Child {}: Getting timestamps'.format(iChildID))
+    try:
+        tTasks, dPrompts = ParseTStampCSV(sTimeStampCSV, sTaskTStampCSV, iChildID, sWordIDsFile)
+    except:
+        logging.error('Child {}: Error while getting timestamps'.format(iChildID))
+        raise Exception("Child {}: Error while getting timestamps".format(iChildID))
 
 
+    nTasks = len(tTasks)
+
+    logging.info('Child {}: {} tasks timestamps detected'.format(iChildID, nTasks))
+
+    for i in range(nTasks):
+        iTaskID = i+1
+
+        if iTaskID in dPrompts:
+            logging.info('Child {}: task {} contains {} prompts'.format(iChildID, iTaskID, len(dPrompts[iTaskID])))
+        else:
+            logging.info('Child {}: task {} contains {} prompts'.format(iChildID, iTaskID, 0))
+
+    logging.info('Child {}: Getting Beep times'.format(iChildID))
+    #try:
+    #    lBeepTimes = GetBeepTimesML(sConfigFile, sWavFile)
+    #except:
+    #    logging.error('Child {}: Error while detecting beep times'.format(iChildID))
+    #    raise Exception("Child {}: Error while detecting beep times".format(iChildID))
+
+    lBeepTimes = np.asarray([ 10345,50205,122302,221755,268294])
+    lBeepTimes = lBeepTimes / 100.0
+    try:
+        fOffsetTime = GetOffsetTime(tTasks,lBeepTimes)
+    except:
+        logging.error('Child {}: Error while getting offset time'.format(iChildID))
+        raise Exception("Child {}: Error while getting offset time".format(iChildID))
+
+
+    if fOffsetTime == -1:
+        raise Exception("child {}: session speech File {} not exist".format(iChildID,sWavFile))
+     
+    logging.info('Child {}: offset time {}'.format(iChildID,fOffsetTime))
+
+    #testWav = '../../Recordings/13_aug_2020/90 3_2_0/90 Primary_15-01.wav'
+    _wav_param, RWav = txtgrd.ReadWavFile(sWavFile)
+
+
+    for i in range(nTasks):
+
+        iTaskID = i + 1
+
+        logging.info('Child {}: Annotating task {}'.format(iChildID,iTaskID))
+
+        fTaskST,fTaskET = tTasks[i]
+        
+        #Fix missing start and end times of tasks, if start missing use end of previous task, if end time missing use start time of next task
+        if fTaskST == -1:
+            if i ==0:
+                fTaskST = 0
+            else:
+                fTaskST = tTasks[i-1][1]
+        if fTaskET == -1:
+            if i == nTasks -1:
+                fTaskET = _wav_param.nframes/_wav_param.framerate
+            else:
+                fTaskET = tTasks[i+1][0]
+        
+        fTaskST += fOffsetTime
+        fTaskET += fOffsetTime
+        
+        fTaskSF = int(fTaskST*_wav_param.framerate*_wav_param.sampwidth)
+        fTaskEF = int(fTaskET*_wav_param.framerate*_wav_param.sampwidth)
+        
+        #As the sample width is 2 bytes, the start and end positions should be even number
+        fTaskSF += (fTaskSF%2)
+        fTaskEF += (fTaskEF%2)
+        
+        nFrams = int((fTaskEF-fTaskSF)/_wav_param.sampwidth)
+        
+        txtgrd.WriteWaveSegment(RWav[fTaskSF:fTaskEF],_wav_param,nFrams,join(sOutDir,'{}_task{}.wav'.format(sWavFileBasename,iTaskID)))
+
+
+        #Generate textgrids
+        if iTaskID in [3,4]:
+            continue
+        dTiers = defaultdict(lambda: [[],[],[]])
+        lPrompts = dPrompts[iTaskID]
+        for p in lPrompts:
+            fTimeAdj = (p.cueOffset-p.cueOnset)/2
+            fST, fET, label = p.cueOffset - fTimeAdj, p.answerTime, p.word
+            dTiers['Prompt'][0].append(fST)
+            dTiers['Prompt'][1].append(fET)
+            dTiers['Prompt'][2].append(label)
+        dTiers = txtgrd.FillGapsInTxtGridDict(dTiers)
+        txtgrd.WriteTxtGrdFromDict('{}_task{}.txtgrid'.format(sWavFileBasename,iTaskID),dTiers,0.0,dTiers['Prompt'][1][-1])
 
 
     #Detect the start and end of all beep signal(s)
