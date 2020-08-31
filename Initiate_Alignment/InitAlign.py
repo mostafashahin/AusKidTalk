@@ -454,7 +454,7 @@ def Segmentor(sConfigFile, sWavFile, sTimeStampCSV, sTaskTStampCSV, iChildID, sW
         logging.info('Child {}: Annotating task {}'.format(iChildID,iTaskID))
 
         fTaskST,fTaskET = tTasks[i]
-        
+        fRefTime = fTaskST 
         #Fix missing start and end times of tasks, if start missing use end of previous task, if end time missing use start time of next task
         if fTaskST == -1:
             if i ==0:
@@ -490,11 +490,11 @@ def Segmentor(sConfigFile, sWavFile, sTimeStampCSV, sTaskTStampCSV, iChildID, sW
         for p in lPrompts:
             fTimeAdj = (p.cueOffset-p.cueOnset)/2
             fST, fET, label = p.cueOffset - fTimeAdj, p.answerTime, p.word
-            dTiers['Prompt'][0].append(fST)
-            dTiers['Prompt'][1].append(fET)
+            dTiers['Prompt'][0].append(fST-fRefTime)
+            dTiers['Prompt'][1].append(fET-fRefTime)
             dTiers['Prompt'][2].append(label)
         dTiers = txtgrd.FillGapsInTxtGridDict(dTiers)
-        txtgrd.WriteTxtGrdFromDict('{}_task{}.txtgrid'.format(sWavFileBasename,iTaskID),dTiers,0.0,dTiers['Prompt'][1][-1])
+        txtgrd.WriteTxtGrdFromDict(join(sOutDir,'{}_task{}.txtgrid'.format(sWavFileBasename,iTaskID)),dTiers,0.0,dTiers['Prompt'][1][-1])
 
 
     #Detect the start and end of all beep signal(s)
