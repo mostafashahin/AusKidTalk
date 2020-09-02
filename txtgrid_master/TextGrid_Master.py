@@ -211,7 +211,7 @@ def ParseTxtGrd(sTxtGrd):
         return
     return dTiers
 
-
+#TODO use logging and raise error
 def ValidateTextGridDict(dTiers, lSlctdTiers=[]):
     #Check if lSlctdTiers is in dTiers
     if lSlctdTiers:
@@ -229,7 +229,7 @@ def ValidateTextGridDict(dTiers, lSlctdTiers=[]):
         aSTs = np.asarray(lSTs)
         aETs = np.asarray(lETs)
 
-        assert (aETs > aSTs).all(), "End time is greater than strat time in one or more intervals in tier {}".format(sTier)
+        assert (aETs > aSTs).all(), "Start time is greater than end time in one or more intervals in tier {}".format(sTier)
 
         assert is_sorted(aETs) and is_sorted(aSTs), "Either End times or Start Times of tier {} not in order".format(sTier)
 
@@ -252,6 +252,18 @@ def FillGapsInTxtGridDict(dTiers,sFilGab = "", lSlctdTiers=[]):
         lLabel_f = list(np.insert(aLabels,pos[0]+1,sFilGab))
         dTiers_f[sTier] = [lSTs_f,lETs_f,lLabel_f]
     return dTiers_f
+
+def SortTxtGridDict(dTiers):
+    for p in dTiers:
+        lSTs, lETs, lLabls = dTiers[p]
+        aSTs = np.asarray(lSTs)
+        aETs = np.asarray(lETs)
+        aLabels = np.asarray(lLabls)
+
+    indxSort = np.argsort(aSTs)
+    dTiers[p] = (aSTs[indxSort], aETs[indxSort],aLabels[indxSort])
+
+    return dTiers
 
 def WriteTxtGrdFromDict(sFName, dTiers, fST, fET, bReset=True, lSlctdTiers=[], sFilGab = None):
     ValidateTextGridDict(dTiers,lSlctdTiers)
