@@ -360,7 +360,7 @@ def GetTimeStampsSQL(iChildID):
         logging.error('child {}: Words table is empty')
         raise RuntimeError("words table is empty")
     
-    pdWordIDs = pd.DataFrame.from_dict(results)
+    pdWordIDs = pd.DataFrame.from_dict(results).set_index('word_id')
     dWordIDs = pdWordIDs.to_dict()['name']
 
 
