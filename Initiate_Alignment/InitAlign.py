@@ -13,7 +13,7 @@ from tqdm import tqdm
 import mysql.connector
 
 sys.path.insert(0,'tools')
-import pyAudioAnalysis.pyAudioAnalysis.ShortTermFeatures as sF
+import pyAudioAnalysis.ShortTermFeatures as sF
 import txtgrid_master.TextGrid_Master as txtgrd
 
 #Configure Logger
