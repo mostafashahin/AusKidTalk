@@ -1,26 +1,49 @@
 from collections import namedtuple, defaultdict
+import sys
 import pandas as pd
 import numpy as np
 import wave, struct
 import logging
-import configparser
+import configparser, argparse
 from os.path import isfile, join, isdir, splitext, basename
 from os import makedirs
-import pyAudioAnalysis.pyAudioAnalysis.ShortTermFeatures as sF
-import txtgrid_master.TextGrid_Master as txtgrd
 from joblib import dump, load
 from scipy.signal import find_peaks
 from tqdm import tqdm
-import sys
 import mysql.connector
 
+sys.path.insert(0,'tools')
+import pyAudioAnalysis.pyAudioAnalysis.ShortTermFeatures as sF
+import txtgrid_master.TextGrid_Master as txtgrd
+
+#Configure Logger
+logger = logging.getLogger('InitAlign')
+logger.setLevel(logging.DEBUG)
+fh = logging.FileHandler('InitAlign.log')
+fh.setLevel(logging.DEBUG)
+
+ch = logging.StreamHandler()
+ch.setLevel(logging.ERROR)
+
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+ch.setFormatter(formatter)
+fh.setFormatter(formatter)
+
+logger.addHandler(fh)
+logger.addHandler(ch)
 
 
 #MySQL database connection configuration
 UserName = 'unsw'
 Password = 'UNSWspeech'
 HostIP = '166.62.28.111'
-DatabaseName = 'auskidstalk'
+DatabaseName = 'auskidtalk_prod'
+
+#UserName = 'mostafa'
+#Password = 'Hggih;fv2881'
+#HostIP = 'localhost'
+#DatabaseName = 'auskidstalk'
+
 
 #date time columns names for tables
 dDateTimeColNames = {'task_start_end_times' : ('task1_start_time',
@@ -74,6 +97,19 @@ lTasks = ['task1','task2','task3','task4','task5']
 tTaskTimes = namedtuple('TaskTimes',lTasks)
 tPrompt = namedtuple('Prompt',['taskID','wordID','word','answerTime','cueOnset','cueOffset'])
 offset = 2 # seconds added to the end time of each task
+
+def get_args():
+    parser = argparse.ArgumentParser(description='Create TextGrid files for each task from timestamps')
+    parser.add_argument("iChildID", type=int, help='The children ID')
+
+    parser.add_argument("sWaveFile", type=str, help='The path to the primary mic wav file')
+
+    parser.add_argument("sOutDir", type=str, help='Destination to save textgrid files')
+
+    parser.add_argument("--config_File", type=str, dest='sConfigFile', help='The path to the config file contains parameters for beep detection', default='beep.ini')
+
+    return(parser.parse_args())
+    
 
 def GetBeepTimes(sWavFile, nReadFrames = 10, nFramDur = 0.02, zcTh = 0.2, srTh = 0.2, BeepDur = 1, p = 0.8):
     fWav = wave.open(sWavFile,'rb')
@@ -166,11 +202,11 @@ def GetBeepTimesML(sConfFile, sWavFile, iThrshld=98, fBeepDur = 1):
     try:
         Flags = config['FLAGS']
     except KeyError:
-        logging.error('Config File {0} must contains section [FLAGS]'.format(sConfFile))
+        logger.error('Config File {0} must contains section [FLAGS]'.format(sConfFile))
         raise RuntimeError('Config file format error')
     
     if 'Model' not in Flags:
-        logging.error('Please set Model parameter in the config file {0}'.format(sConfFile))
+        logger.error('Please set Model parameter in the config file {0}'.format(sConfFile))
         raise RuntimeError('Config file format error')
     else:
         sModelFile = Flags['Model']
@@ -216,7 +252,7 @@ def GetBeepTimesML(sConfFile, sWavFile, iThrshld=98, fBeepDur = 1):
         nBeepFrames = int(fBeepDur/fFrameRate)
 
         nFrames = int(nSamples / (fFrameRate * iSampleRate))
-        logging.info("Processing file {0} contains {1} frames".format(sWavFile,nFrames))
+        logger.info("Processing file {0} contains {1} frames".format(sWavFile,nFrames))
 
         aBeepMask = np.zeros(nFrames,dtype=int)
 
@@ -251,15 +287,17 @@ def GetBeepTimesML(sConfFile, sWavFile, iThrshld=98, fBeepDur = 1):
                 
                 aBeepMask[i:i+y_pred.shape[0]] = y_pred
                 
-                logging.info('done {} frames out of {} frames'.format(i,nFrames))
-                
                 i = i+y_pred.shape[0]
+
+                logger.debug('done {} frames out of {} frames'.format(i,nFrames))
+                
+                
                 
                 fWav.setpos(fWav.tell() - nOverLabSamples)
 
                 #print(fWav.tell(),nSamples)
-
-                #pbar.update(i)
+                
+                pbar.update(y_pred.shape[0])
         
         suma=np.sum(aBeepMask[:nBeepFrames])
         vSum = np.zeros(aBeepMask.shape[0]-nBeepFrames)
@@ -271,20 +309,18 @@ def GetBeepTimesML(sConfFile, sWavFile, iThrshld=98, fBeepDur = 1):
 
         lBeepTimes = lPeaks * fFrameRate
         
-        logging.info('File {0}: {1} beeps detected at {2}'.format(sWavFile,len(lBeepTimes),lBeepTimes))
+        logger.info('File {0}: {1} beeps detected at {2}'.format(sWavFile,len(lBeepTimes),lBeepTimes))
 
     return lBeepTimes
 
-#TODO read directly from SQL database
 def GetTimeStampsSQL(iChildID):
 
-    #TODO verify ChildID is exist, if ot return error
     try:
         connector = mysql.connector.connect(user=UserName, password=Password,
                               host=HostIP,
                               database=DatabaseName,buffered=True)
     except Exception as err:
-        logging.error('MySQL connection failed with error \n{0}'.format(err))
+        logger.error('MySQL connection failed with error \n{0}'.format(err))
         raise RuntimeError('Database connection failuer')
 
 
@@ -295,13 +331,13 @@ def GetTimeStampsSQL(iChildID):
     cursor.execute(query)
     results = cursor.fetchall()
     if not results:
-        logging.error('No Tables in the database {0}'.format(DatabaseName))
+        logger.error('No Tables in the database {0}'.format(DatabaseName))
         raise RuntimeError('Database empty')
-    print(results)
+    #print(results)
     lTableNames = [list(i.values())[0] for i in results]
     for table in ('words', 'task_start_end_times', 'experiment'):
         if table not in lTableNames:
-            logging.error('Missing table {0} in database {1}'.format(table, DatabaseName))
+            logger.error('Missing table {0} in database {1}'.format(table, DatabaseName))
             raise RuntimeError('Missing table in database')
 
 
@@ -311,11 +347,11 @@ def GetTimeStampsSQL(iChildID):
     results = cursor.fetchall()
 
     if len(results) == 0:
-        logging.error('child {}: No data for the child in the task_start_end_times table in database {}'.format(iChildID,DatabaseName))
+        logger.error('child {}: No data for the child in the task_start_end_times table in database {}'.format(iChildID,DatabaseName))
         raise RuntimeError("Data missing in task_start_end_times table for child {}, check log for more info".format(iChildID))
     
     if len(results) > 1:
-        logging.error('child {}: multiple records for the child in the task_start_end_times table in database {}'.format(iChildID,DatabaseName))
+        logger.error('child {}: multiple records for the child in the task_start_end_times table in database {}'.format(iChildID,DatabaseName))
         raise RuntimeError("Multiple records for the child in the task_start_end_times table for child {}, check log for more info".format(iChildID))
 
     pdChild_Task = pd.DataFrame.from_dict(results)
@@ -327,7 +363,7 @@ def GetTimeStampsSQL(iChildID):
     child_task_tstamps = pdChild_Task.iloc[-1]
     
     if pd.isnull(child_task_tstamps.task1_start_time):
-        logging.error('child {}: No time stamp for the start of task 1 in file {}, Reference time can\'t set'.format(iChildID,sTaskTStampFile))
+        logger.error('child {}: No time stamp for the start of task 1 in file {}, Reference time can\'t set'.format(iChildID,sTaskTStampFile))
 
         raise RuntimeError("Error in task timestamp file for child {}".format(iChildID))
 
@@ -341,7 +377,7 @@ def GetTimeStampsSQL(iChildID):
     results = cursor.fetchall()
 
     if len(results) == 0:
-        logging.error('child {}: No data for the child in the experiment table in database {}'.format(iChildID,DatabaseName))
+        logger.error('child {}: No data for the child in the experiment table in database {}'.format(iChildID,DatabaseName))
         raise RuntimeError("Data missing in experiment table for child {}, check log for more info".format(iChildID))
     
     pdChild = pd.DataFrame.from_dict(results)
@@ -357,7 +393,7 @@ def GetTimeStampsSQL(iChildID):
     results = cursor.fetchall()
 
     if len(results) == 0:
-        logging.error('child {}: Words table is empty')
+        logger.error('child {}: Words table is empty')
         raise RuntimeError("words table is empty")
     
     pdWordIDs = pd.DataFrame.from_dict(results).set_index('word_id')
@@ -370,23 +406,22 @@ def GetTimeStampsSQL(iChildID):
 
     for i,sTaskID in enumerate(lTasks):
         iTaskID = i+1
-        #TODO Use column names
         if sTaskID == 'task1':
             fTaskST,fTaskET_p1, fTaskST_p2, fTaskET = child_task_tstamps.loc['{0}_start_time'.format(sTaskID):'{0}_end_time_2'.format(sTaskID)]
 
         else:
             fTaskST, fTaskET = child_task_tstamps.loc['{0}_start_time'.format(sTaskID):'{0}_end_time'.format(sTaskID)]
-        print(fTaskST,fTaskET,iTaskID)
+        #print(fTaskST,fTaskET,iTaskID)
 
         if pd.isnull(fTaskST):
-            logging.warning('child {0}: No start timestamp for task {1} in file {2}'.format(iChildID,sTaskID,sTaskTStampFile))
+            logger.warning('child {0}: No start timestamp for task {1} in file {2}'.format(iChildID,sTaskID,sTaskTStampFile))
             fTaskST = -1
             #lTaskTimes.append((-1,-1))
         else:
             fTaskST = fTaskST.timestamp() - RefTime
 
         if pd.isnull(fTaskET):
-            logging.warning('child {0}: No end timestamp for task {1}'.format(iChildID,sTaskID))
+            logger.warning('child {0}: No end timestamp for task {1}'.format(iChildID,sTaskID))
             fTaskET = -1
         else:
             fTaskET = fTaskET.timestamp() - RefTime
@@ -397,36 +432,36 @@ def GetTimeStampsSQL(iChildID):
         pdTask = pdChild[pdChild.task_id==iTaskID] ##CHANGE if COL CHANGED
         
         if pdTask.empty:
-            logging.warning('child {}: No data of task {} in database {}, task will be skipped'.format(iChildID, sTaskID, DatabaseName))
+            logger.warning('child {}: No data of task {} in database {}, task will be skipped'.format(iChildID, sTaskID, DatabaseName))
             continue
         
         for r in pdTask.iterrows():
             #TODO handle any nonexist field
             data = r[1]
-            iWordID = data.word_id #TODO handle if ID not exist
+            iWordID = data.word_id
             if pd.isnull(iWordID) or iWordID not in dWordIDs:
-                logging.warning('child {}: word id {} of task {} either null or not exist in word-mappingfile word set to NULL'.format(iChildID, str(iWordID), sTaskID))
+                logger.warning('child {}: word id {} of task {} either null or not exist in word-mappingfile word set to NULL'.format(iChildID, str(iWordID), sTaskID))
                 sWord = 'NULL'
             else:
                 sWord = dWordIDs[iWordID]
             
             answerTime = data.answer_time
             if pd.isnull(answerTime):
-                logging.warning('child {}: answer timestamp is null in word {} task {}'.format(iChildID, str(iWordID), sTaskID))
+                logger.warning('child {}: answer timestamp is null in word {} task {}'.format(iChildID, str(iWordID), sTaskID))
                 answerTime = -1
             else:
                 answerTime = answerTime.timestamp() - RefTime
        
             cueOnset = data.audio_cue_onset
             if pd.isnull(cueOnset):
-                logging.warning('child {}: cueOnset timestamp is null in word {} task {}'.format(iChildID, str(iWordID), sTaskID))
+                logger.warning('child {}: cueOnset timestamp is null in word {} task {}'.format(iChildID, str(iWordID), sTaskID))
                 cueOnset = -1
             else:
                 cueOnset = cueOnset.timestamp() - RefTime
 
             cueOffset = data.task1_audio_cue_offset
             if pd.isnull(cueOffset):
-                logging.warning('child {}: cueOffset timestamp is null in word {} task {}'.format(iChildID, str(iWordID), sTaskID))
+                logger.warning('child {}: cueOffset timestamp is null in word {} task {}'.format(iChildID, str(iWordID), sTaskID))
                 cueOffset = -1
             else:
                 cueOffset = cueOffset.timestamp() - RefTime
@@ -436,6 +471,7 @@ def GetTimeStampsSQL(iChildID):
             dTaskPrompts[iTaskID].append(prompt)
 
     tTasks = tTaskTimes(*lTaskTimes)
+    #TODO return 4 times for task1
     return tTasks, dTaskPrompts
 
 
@@ -458,15 +494,15 @@ def ParseTStampCSV(sTStampFile, sTaskTStampFile, iChildID, sWordIDsFile):
     data_task = pd.read_csv(sTaskTStampFile,parse_dates=list(range(2,12)))
     pdChild_Task = data_task[data_task.child_id == iChildID]
     if pdChild_Task.empty:
-        logging.error('child {}: No data for the child in the task timestamps file {}'.format(iChildID,sTaskTStampFile))
+        logger.error('child {}: No data for the child in the task timestamps file {}'.format(iChildID,sTaskTStampFile))
         raise RuntimeError("Data missing in task timestamp file for child {}, check log for more info".format(iChildID))
     
     if pdChild_Task.shape[0] > 1:
-        logging.warning('child {}: more than one line in the task timestamps file {}, only one line expected\nonly last line considered'.format(iChildID,sTaskTStampFile))
+        logger.warning('child {}: more than one line in the task timestamps file {}, only one line expected\nonly last line considered'.format(iChildID,sTaskTStampFile))
 
     child_task_tstamps = pdChild_Task.iloc[-1]
     if pd.isnull(child_task_tstamps.task1_start_time):
-        logging.error('child {}: No time stamp for the start of task 1 in file {}, Reference time can\'t set'.format(iChildID,sTaskTStampFile))
+        logger.error('child {}: No time stamp for the start of task 1 in file {}, Reference time can\'t set'.format(iChildID,sTaskTStampFile))
 
         raise RuntimeError("Error in task timestamp file for child {}".format(iChildID))
 
@@ -477,7 +513,7 @@ def ParseTStampCSV(sTStampFile, sTaskTStampFile, iChildID, sWordIDsFile):
     pdChild = data[data.id==iChildID]
     
     if pdChild.empty:
-        logging.error('child {}: No data for the child in the prompt timestamps file {}'.format(iChildID, sTStampFile))
+        logger.error('child {}: No data for the child in the prompt timestamps file {}'.format(iChildID, sTStampFile))
         raise RuntimeError("Data missing in task timestamp file for child {}, check log for more info".format(iChildID))
 
     dTaskPrompts = defaultdict(list)
@@ -490,14 +526,14 @@ def ParseTStampCSV(sTStampFile, sTaskTStampFile, iChildID, sWordIDsFile):
         #print(fTaskST,fTaskET,iTaskID)
 
         if pd.isnull(fTaskST):
-            logging.warning('child {0}: No start timestamp for task {1} in file {2}'.format(iChildID,sTaskID,sTaskTStampFile))
+            logger.warning('child {0}: No start timestamp for task {1} in file {2}'.format(iChildID,sTaskID,sTaskTStampFile))
             fTaskST = -1
             #lTaskTimes.append((-1,-1))
         else:
             fTaskST = fTaskST.timestamp() - RefTime
 
         if pd.isnull(fTaskET):
-            logging.warning('child {0}: No end timestamp for task {1} in file {2}'.format(iChildID,sTaskID,sTaskTStampFile))
+            logger.warning('child {0}: No end timestamp for task {1} in file {2}'.format(iChildID,sTaskID,sTaskTStampFile))
             fTaskET = -1
         else:
             fTaskET = fTaskET.timestamp() - RefTime
@@ -508,7 +544,7 @@ def ParseTStampCSV(sTStampFile, sTaskTStampFile, iChildID, sWordIDsFile):
         pdTask = pdChild[pdChild.task_id==iTaskID] ##CHANGE if COL CHANGED
         
         if pdTask.empty:
-            logging.warning('child {}: No data of task {} in the prompt timestamps file {}, task will be skipped'.format(iChildID, sTaskID, sTStampFile))
+            logger.warning('child {}: No data of task {} in the prompt timestamps file {}, task will be skipped'.format(iChildID, sTaskID, sTStampFile))
             continue
         
         for r in pdTask.iterrows():
@@ -516,28 +552,28 @@ def ParseTStampCSV(sTStampFile, sTaskTStampFile, iChildID, sWordIDsFile):
             data = r[1]
             iWordID = data.word_id #TODO handle if ID not exist
             if pd.isnull(iWordID) or iWordID not in dWordIDs:
-                logging.warning('child {}: word id {} of task {} either null or not exist in word-mappingfile word set to NULL'.format(iChildID, str(iWordID), sTaskID))
+                logger.warning('child {}: word id {} of task {} either null or not exist in word-mappingfile word set to NULL'.format(iChildID, str(iWordID), sTaskID))
                 sWord = 'NULL'
             else:
                 sWord = dWordIDs[iWordID]
             
             answerTime = data.answer_time
             if pd.isnull(answerTime):
-                logging.warning('child {}: answer timestamp is null in word {} task {}'.format(iChildID, str(iWordID), sTaskID))
+                logger.warning('child {}: answer timestamp is null in word {} task {}'.format(iChildID, str(iWordID), sTaskID))
                 answerTime = -1
             else:
                 answerTime = answerTime.timestamp() - RefTime
        
             cueOnset = data.audio_cue_onset
             if pd.isnull(cueOnset):
-                logging.warning('child {}: cueOnset timestamp is null in word {} task {}'.format(iChildID, str(iWordID), sTaskID))
+                logger.warning('child {}: cueOnset timestamp is null in word {} task {}'.format(iChildID, str(iWordID), sTaskID))
                 cueOnset = -1
             else:
                 cueOnset = cueOnset.timestamp() - RefTime
 
             cueOffset = data.task1_audio_cue_offset
             if pd.isnull(cueOffset):
-                logging.warning('child {}: cueOffset timestamp is null in word {} task {}'.format(iChildID, str(iWordID), sTaskID))
+                logger.warning('child {}: cueOffset timestamp is null in word {} task {}'.format(iChildID, str(iWordID), sTaskID))
                 cueOffset = -1
             else:
                 cueOffset = cueOffset.timestamp() - RefTime
@@ -554,6 +590,7 @@ def GetOffsetTime(tTasks, lBeepTimes):
     #Get number of tasks
     nTasks = len(tTasks)
     nBeepTimeStamps = []
+    #TODO for task1 there are 2 beeps use them for more accurate offset time estimation
     for fTaskST, fTaskET in tTasks:
         nBeepTimeStamps.append(fTaskST) if fTaskST != -1 else Null
     lDifTimes = []
@@ -567,23 +604,23 @@ def GetOffsetTime(tTasks, lBeepTimes):
     iEqualDiss = np.where(np.diff(lDifTimes,n=1,axis=0) < 1 )[0]
     
     if iEqualDiss.size == 0:
-        logging.error('Failed to verify beep times')
+        logger.error('Failed to verify beep times')
         fOffsetTime=-1
     else:
         fOffsetTime = np.mean(lDifTimes[iEqualDiss])
     
     return fOffsetTime
 
-#TODO will use mySQL database, no need to CSV files, CHILD ID will be extracted from wav file
 #def Segmentor(sConfigFile, sWavFile, sTimeStampCSV, sTaskTStampCSV, iChildID, sWordIDsFile, sOutDir):
 def Segmentor(sConfigFile, sWavFile, iChildID, sOutDir):
 
     #TODO get child ID from wav file
     #TODO verify naming convention of file
-
+    #print('Segmentor')
     #Load Wav File (session)
+    logger.info("Child {}: Start Segmentation.....")
     if not isfile(sWavFile):
-        logging.error("Child {}: session speech File {} not exist".format(iChildID,sWavFile))
+        logger.error("Child {}: session speech File {} not exist".format(iChildID,sWavFile))
         raise Exception("Child {}: session speech File {} not exist".format(iChildID,sWavFile))
     
     sWavFileBasename = splitext(basename(sWavFile))[0]
@@ -591,49 +628,50 @@ def Segmentor(sConfigFile, sWavFile, iChildID, sOutDir):
     if not isdir(sOutDir):
         makedirs(sOutDir)
      
-    logging.info('Child {}: Start Processing File {}'.format(iChildID,sWavFile))
+    logger.info('Child {}: Start Processing File {}'.format(iChildID,sWavFile))
     
-    logging.info('Child {}: Getting timestamps'.format(iChildID))
+    logger.info('Child {}: Getting timestamps'.format(iChildID))
     try:
         #tTasks, dPrompts = ParseTStampCSV(sTimeStampCSV, sTaskTStampCSV, iChildID, sWordIDsFile)
         tTasks, dPrompts = GetTimeStampsSQL(iChildID)
     except:
-        logging.error('Child {}: Error while getting timestamps'.format(iChildID))
+        logger.error('Child {}: Error while getting timestamps'.format(iChildID))
         raise Exception("Child {}: Error while getting timestamps".format(iChildID))
 
 
     nTasks = len(tTasks)
 
-    logging.info('Child {}: {} tasks timestamps detected'.format(iChildID, nTasks))
+    logger.info('Child {}: {} tasks timestamps detected'.format(iChildID, nTasks))
 
     for i in range(nTasks):
         iTaskID = i+1
 
         if iTaskID in dPrompts:
-            logging.info('Child {}: task {} contains {} prompts'.format(iChildID, iTaskID, len(dPrompts[iTaskID])))
+            logger.info('Child {}: task {} contains {} prompts'.format(iChildID, iTaskID, len(dPrompts[iTaskID])))
         else:
-            logging.info('Child {}: task {} contains {} prompts'.format(iChildID, iTaskID, 0))
+            logger.info('Child {}: task {} contains {} prompts'.format(iChildID, iTaskID, 0))
 
-    logging.info('Child {}: Getting Beep times'.format(iChildID))
-    #try:
-    #    lBeepTimes = GetBeepTimesML(sConfigFile, sWavFile)
-    #except:
-    #    logging.error('Child {}: Error while detecting beep times'.format(iChildID))
-    #    raise Exception("Child {}: Error while detecting beep times".format(iChildID))
+    logger.info('Child {}: Getting Beep times'.format(iChildID))
+    try:
+        lBeepTimes = GetBeepTimesML(sConfigFile, sWavFile)
+    except:
+        logger.error('Child {}: Error while detecting beep times'.format(iChildID))
+        raise Exception("Child {}: Error while detecting beep times".format(iChildID))
 
-    lBeepTimes = np.asarray([ 10345,50205,122302,221755,268294])
-    lBeepTimes = lBeepTimes / 100.0
+    logger.info('Child {}: {} beeps detected @ times {}'.format(iChildID, len(lBeepTimes),lBeepTimes))
+    #lBeepTimes = np.asarray([  10.23,  644.65, 3283.61, 4095.36])
+    #lBeepTimes = lBeepTimes / 100.0
     try:
         fOffsetTime = GetOffsetTime(tTasks,lBeepTimes)
     except:
-        logging.error('Child {}: Error while getting offset time'.format(iChildID))
+        logger.error('Child {}: Error while getting offset time'.format(iChildID))
         raise Exception("Child {}: Error while getting offset time".format(iChildID))
 
 
     if fOffsetTime == -1:
         raise Exception("child {}: session speech File {} not exist".format(iChildID,sWavFile))
      
-    logging.info('Child {}: offset time {}'.format(iChildID,fOffsetTime))
+    logger.info('Child {}: offset time {}'.format(iChildID,fOffsetTime))
 
     #testWav = '../../Recordings/13_aug_2020/90 3_2_0/90 Primary_15-01.wav'
     _wav_param, RWav = txtgrd.ReadWavFile(sWavFile)
@@ -643,7 +681,7 @@ def Segmentor(sConfigFile, sWavFile, iChildID, sOutDir):
 
         iTaskID = i + 1
 
-        logging.info('Child {}: Annotating task {}'.format(iChildID,iTaskID))
+        logger.info('Child {}: Annotating task {}'.format(iChildID,iTaskID))
 
         fTaskST,fTaskET = tTasks[i]
         fRefTime = fTaskST 
@@ -675,6 +713,7 @@ def Segmentor(sConfigFile, sWavFile, iChildID, sOutDir):
 
 
         #Generate textgrids
+        #TODO Fix tasks 3 & 4
         if iTaskID in [3,4]:
             continue
         dTiers = defaultdict(lambda: [[],[],[]])
@@ -687,6 +726,16 @@ def Segmentor(sConfigFile, sWavFile, iChildID, sOutDir):
             dTiers['Prompt'][2].append(label)
         #print(dTiers)
         dTiers = txtgrd.SortTxtGridDict(dTiers)
+
+
+
+        #REMOVE THIS########################################
+        with open(join(sOutDir,'{}_task{}.int'.format(sWavFileBasename,iTaskID)),'w') as f:
+            for fST, fET, sLabel in zip(*dTiers['Prompt']):
+                print(fST, fET, sLabel, file=f)
+        ############################################
+
+
         dTiers = txtgrd.FillGapsInTxtGridDict(dTiers)
         #dump(dTiers,'dTier{}.jbl'.format(iTaskID))
         txtgrd.WriteTxtGrdFromDict(join(sOutDir,'{}_task{}.txtgrid'.format(sWavFileBasename,iTaskID)),dTiers,0.0,dTiers['Prompt'][1][-1])
@@ -714,3 +763,19 @@ def Segmentor(sConfigFile, sWavFile, iChildID, sOutDir):
 
     """
 
+def main():
+    args = get_args()
+
+    iChildID, sWaveFile, sOutDir = args.iChildID, args.sWaveFile, args.sOutDir
+
+    sConfigFile = args.sConfigFile if 'sConfigFile' in args else 'beep.ini'
+    
+    #try:
+    #    print('trying....')
+    Segmentor(sConfigFile, sWaveFile, iChildID, sOutDir)
+    #except:
+    #    logger.error('Segmentor failed')
+
+
+if __name__ == '__main__':
+    main()
