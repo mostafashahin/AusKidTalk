@@ -29,10 +29,10 @@ fi
 mkdir -p $wrkDir/$childID
 
 echo "Download primary wav file of child $childID"
-#scp -T $HOST:"$FILE_PATH" $wrkDir/$childID/primary.wav
+scp -T $HOST:"$FILE_PATH" $wrkDir/$childID/primary.wav
 
 #Convert to 16 bit
 echo "Converting to 16 bit for beep detection"
-#sox $wrkDir/$childID/primary.wav -c 1 -b 16 $wrkDir/$childID/primary_16.wav || exit 1
+sox $wrkDir/$childID/primary.wav -c 1 -b 16 $wrkDir/$childID/primary_16.wav || exit 1
 
 $PYTHON Initiate_Alignment/InitAlign.py $childID $wrkDir/$childID/primary_16.wav $wrkDir/$childID/txtgrids || exit 1
