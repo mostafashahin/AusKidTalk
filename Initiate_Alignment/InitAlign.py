@@ -420,7 +420,7 @@ def GetTimeStampsSQL(iChildID):
         else:
             fTaskST = fTaskST.timestamp() - RefTime
 
-        if pd.isnull(fTaskET):
+        if pd.lTableNamesisnull(fTaskET):
             logger.warning('child {0}: No end timestamp for task {1}'.format(iChildID,sTaskID))
             fTaskET = -1
         else:
