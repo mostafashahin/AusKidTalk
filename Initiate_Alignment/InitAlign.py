@@ -675,6 +675,7 @@ def Segmentor(sConfigFile, sWavFile, iChildID, sOutDir):
 
     #testWav = '../../Recordings/13_aug_2020/90 3_2_0/90 Primary_15-01.wav'
     _wav_param, RWav = txtgrd.ReadWavFile(sWavFile)
+    
 
 
     for i in range(nTasks):
@@ -710,7 +711,7 @@ def Segmentor(sConfigFile, sWavFile, iChildID, sOutDir):
         nFrams = int((fTaskEF-fTaskSF)/_wav_param.sampwidth)
         
         txtgrd.WriteWaveSegment(RWav[fTaskSF:fTaskEF],_wav_param,nFrams,join(sOutDir,'{}_task{}.wav'.format(sWavFileBasename,iTaskID)))
-
+        ETime = nFrams / _wav_param.framerate
 
         #Generate textgrids
         #TODO Fix tasks 3 & 4
@@ -736,9 +737,10 @@ def Segmentor(sConfigFile, sWavFile, iChildID, sOutDir):
         ############################################
 
 
-        dTiers = txtgrd.FillGapsInTxtGridDict(dTiers)
+        #dTiers = txtgrd.FillGapsInTxtGridDict(dTiers)
         #dump(dTiers,'dTier{}.jbl'.format(iTaskID))
-        txtgrd.WriteTxtGrdFromDict(join(sOutDir,'{}_task{}.txtgrid'.format(sWavFileBasename,iTaskID)),dTiers,0.0,dTiers['Prompt'][1][-1])
+        
+        txtgrd.WriteTxtGrdFromDict(join(sOutDir,'{}_task{}.txtgrid'.format(sWavFileBasename,iTaskID)),dTiers,0.0,ETime,sFilGab="")
 
 
     #Detect the start and end of all beep signal(s)
