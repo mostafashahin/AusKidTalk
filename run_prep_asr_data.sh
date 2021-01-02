@@ -3,7 +3,7 @@
 #DIR=/opt/AusKidTalk_Recordings/annotate1
 tasks="task1 task2 task5"
 
-DIR=/media/Windows/root/AusKidTalk/annotate1/
+DIR=$1
 set -e
 
 ls $DIR | while read direct
