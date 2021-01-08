@@ -7,6 +7,8 @@ DIR=$1
 set -e
 #TODO: Out more info
 
+[ -z $AKT ] && AKT=`pwd`
+
 ls $DIR | while read direct
 do
     stage=0
@@ -23,7 +25,7 @@ do
     mkdir -p $OUT_DIR
     mode=''
     for task in $tasks; do
-        python3 tools/prep_data_from_txtgrid.py $LOCAL_OUT_DIR/txtgrids/primary_16b_$task.wav \
+        python3 $AKT/tools/prep_data_from_txtgrid.py $LOCAL_OUT_DIR/txtgrids/primary_16b_$task.wav \
         $LOCAL_OUT_DIR/txtgrids/primary_16b_$task.txtgrid $OUT_DIR $mode -sid $childID -rid ${childID}_$task -p Prompt
         mode='-a'
     done
