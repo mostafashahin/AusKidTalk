@@ -5,6 +5,7 @@ tasks="task1 task2 task5"
 
 DIR=$1
 set -e
+#TODO: Out more info
 
 ls $DIR | while read direct
 do

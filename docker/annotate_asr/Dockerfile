@@ -1,47 +1,19 @@
-
-FROM ubuntu 
-ENV TZ=Australia/Sydney
-
-RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
-
-LABEL maintainer="mdoulaty@gmail.com"
+FROM auskidtalk/asr_base
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-        g++ \
-        make \
-        automake \
-        autoconf \
-        bzip2 \
-        unzip \
-        wget \
-        sox \
-        libtool \
-        git \
-        subversion \
-        python2.7 \
-        python3 \
-        zlib1g-dev \
-        ca-certificates \
-        gfortran \
-        patch \
-        ffmpeg \
-	vim && \
-    rm -rf /var/lib/apt/lists/*
+    apt-get install -y git sox python3-venv python3-pip curl
 
-RUN ln -s /usr/bin/python2.7 /usr/bin/python
+RUN pip3 install -U pip
 
-RUN git clone --depth 1 https://github.com/kaldi-asr/kaldi.git /opt/kaldi && \
-    cd /opt/kaldi/tools && \
-    ./extras/install_mkl.sh && \
-    make && \
-    cd /opt/kaldi/src && \
-    ./configure --shared && \
-    make depend && \
-    make && \
-    find /opt/kaldi -type f \( -name "*.o" -o -name "*.la" -o -name "*.a" \) -exec rm {} \; && \
-    find /opt/intel -type f -name "*.a" -exec rm {} \; && \
-    find /opt/intel -type f -regex '.*\(_mc.?\|_mic\|_thread\|_ilp64\)\.so' -exec rm {} \; && \
-    rm -rf /opt/kaldi/.git
-WORKDIR /opt/kaldi/
+ENV DOCKERVERSION=20.10.1
 
+RUN curl -fsSLO https://download.docker.com/linux/static/stable/x86_64/docker-${DOCKERVERSION}.tgz \
+    && tar xzvf docker-${DOCKERVERSION}.tgz --strip 1 -C /usr/local/bin docker/docker \
+    && rm docker-${DOCKERVERSION}.tgz
+
+RUN git clone https://github.com/mostafashahin/AusKidTalk.git /opt/AusKidTalk/ && \
+    cd /opt/AusKidTalk && \
+    pip3 install -r requirements.txt
+
+RUN cd /opt/kaldi/egs && \
+    git clone https://github.com/mostafashahin/akt-asr.git
