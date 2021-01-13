@@ -259,9 +259,8 @@ def SortTxtGridDict(dTiers):
         aSTs = np.asarray(lSTs)
         aETs = np.asarray(lETs)
         aLabels = np.asarray(lLabls)
-
-    indxSort = np.argsort(aSTs)
-    dTiers[p] = (aSTs[indxSort], aETs[indxSort],aLabels[indxSort])
+        indxSort = np.argsort(aSTs)
+        dTiers[p] = (aSTs[indxSort], aETs[indxSort],aLabels[indxSort])
 
     return dTiers
 
