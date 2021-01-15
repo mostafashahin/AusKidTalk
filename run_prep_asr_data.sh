@@ -4,7 +4,7 @@
 tasks="task1 task2 task5"
 
 DIR=$1
-set -e
+
 #TODO: Out more info
 
 [ -z $AKT ] && AKT=`pwd`
@@ -24,9 +24,11 @@ do
     OUT_DIR=$LOCAL_OUT_DIR/asr/data
     mkdir -p $OUT_DIR
     mode=''
+    log=$LOCAL_OUT_DIR/run_prep_asr_data.log
     for task in $tasks; do
+        echo "Child $childID: Start processing task $task" 2>&1 | tee -a $log
         python3 $AKT/tools/prep_data_from_txtgrid.py $LOCAL_OUT_DIR/txtgrids/primary_16b_$task.wav \
-        $LOCAL_OUT_DIR/txtgrids/primary_16b_$task.txtgrid $OUT_DIR $mode -sid $childID -rid ${childID}_$task -p Prompt
+        $LOCAL_OUT_DIR/txtgrids/primary_16b_$task.txtgrid $OUT_DIR $mode -sid $childID -rid ${childID}_$task -p Prompt 2>&1 | tee -a $log || {echo "Error in Child Id $childID task $task " 2>&1 | tee -a $log; continue }
         mode='-a'
     done
 
