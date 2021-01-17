@@ -229,7 +229,7 @@ def ValidateTextGridDict(dTiers, lSlctdTiers=[]):
         aSTs = np.asarray(lSTs)
         aETs = np.asarray(lETs)
 
-        assert (aETs > aSTs).all(), "Start time is greater than end time in one or more intervals in tier {}".format(sTier)
+        assert (aETs >= aSTs).all(), "Start time is greater than end time in one or more intervals in tier {}".format(sTier)
 
         assert is_sorted(aETs) and is_sorted(aSTs), "Either End times or Start Times of tier {} not in order".format(sTier)
 
